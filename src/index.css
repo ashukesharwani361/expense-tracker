@@ -4,14 +4,42 @@
   --font-sans: "Segoe UI", system-ui, sans-serif;
 }
 
-html {
+:root {
   color-scheme: dark;
+  background: #020817;
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: var(--font-sans);
-  background: #0b1220;
-  color: #e8eef8;
+  background:
+    radial-gradient(circle at top, rgba(16, 185, 129, 0.12), transparent 20%),
+    #020817;
+  color: #e2e8f0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+@media (max-width: 640px) {
+  body {
+    background: #020817;
+  }
 }

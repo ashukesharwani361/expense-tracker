@@ -8,6 +8,22 @@ export const CATEGORIES = [
   { id: 'other', label: 'Other', color: 'bg-slate-400' },
 ]
 
+export const PAYMENT_METHODS = [
+  { id: 'upi', label: 'UPI' },
+  { id: 'card', label: 'Card' },
+  { id: 'cash', label: 'Cash' },
+  { id: 'bank', label: 'Bank transfer' },
+  { id: 'other', label: 'Other' },
+]
+
+export const INCOME_SOURCES = [
+  { id: 'salary', label: 'Salary' },
+  { id: 'freelance', label: 'Freelance' },
+  { id: 'business', label: 'Business' },
+  { id: 'investment', label: 'Investment' },
+  { id: 'other', label: 'Other' },
+]
+
 export function formatCurrency(amount) {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -31,7 +47,9 @@ export function currentMonthValue() {
 }
 
 export function todayIso() {
-  return new Date().toISOString().slice(0, 10)
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
 }
 
 export function monthLabel(monthValue) {

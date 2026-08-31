@@ -1,11 +1,11 @@
 import { Pencil, Trash2 } from 'lucide-react'
-import { CATEGORIES, formatCurrency, formatDate } from '../lib/format'
+import { CATEGORIES, INCOME_SOURCES, PAYMENT_METHODS, formatCurrency, formatDate } from '../lib/format'
 
 export default function ExpenseList({ expenses, onEdit, onDelete }) {
   if (expenses.length === 0) {
     return (
       <p className="rounded-2xl border border-dashed border-white/15 p-8 text-center text-sm text-slate-400">
-        No expenses match these filters.
+        No transactions match these filters.
       </p>
     )
   }
@@ -28,6 +28,8 @@ export default function ExpenseList({ expenses, onEdit, onDelete }) {
           <ul className="space-y-2">
             {grouped[date].map((expense) => {
               const category = CATEGORIES.find((item) => item.id === expense.category)
+              const paymentMethod = PAYMENT_METHODS.find((item) => item.id === expense.paymentMethod)
+              const isIncome = expense.type === 'income'
               return (
                 <li
                   key={expense.id}
@@ -36,17 +38,24 @@ export default function ExpenseList({ expenses, onEdit, onDelete }) {
                   <div className="min-w-0">
                     <p className="truncate font-medium">{expense.title}</p>
                     <p className="text-xs text-slate-400">
-                      {category?.label ?? 'Other'}
+                      <span className={isIncome ? 'text-emerald-300' : 'text-orange-300'}>
+                        {isIncome
+                          ? INCOME_SOURCES.find((item) => item.id === expense.source)?.label ?? 'Other'
+                          : category?.label ?? 'Other'}
+                      </span>
+                      {paymentMethod ? ` · ${paymentMethod.label}` : ''}
                       {expense.note ? ` · ${expense.note}` : ''}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span className="font-semibold">{formatCurrency(expense.amount)}</span>
+                    <span className={`font-semibold ${isIncome ? 'text-emerald-300' : ''}`}>
+                      {isIncome ? '+' : '-'}{formatCurrency(expense.amount)}
+                    </span>
                     <button
                       type="button"
                       onClick={() => onEdit(expense)}
                       className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white"
-                      aria-label="Edit expense"
+                        aria-label={`Edit ${isIncome ? 'income' : 'expense'}`}
                     >
                       <Pencil size={16} />
                     </button>

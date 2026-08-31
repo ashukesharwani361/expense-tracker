@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
-import { CATEGORIES, PAYMENT_METHODS, todayIso } from '../lib/format'
+import { INCOME_SOURCES, PAYMENT_METHODS, todayIso } from '../lib/format'
 
 const emptyForm = {
   title: '',
   amount: '',
-  category: 'food',
+  source: 'salary',
   date: todayIso(),
   note: '',
-  paymentMethod: 'upi',
+  paymentMethod: 'bank',
 }
 
-export default function ExpenseForm({ onSubmit, editing, onCancel }) {
+export default function IncomeForm({ onSubmit, editing, onCancel }) {
   const [form, setForm] = useState(emptyForm)
 
   useEffect(() => {
@@ -18,7 +18,7 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
       setForm({
         title: editing.title,
         amount: String(editing.amount),
-        category: editing.category,
+        source: editing.source || editing.category || 'other',
         date: editing.date,
         note: editing.note || '',
         paymentMethod: editing.paymentMethod || 'other',
@@ -41,28 +41,27 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
     onSubmit({
       title: form.title.trim(),
       amount,
-      category: form.category,
+      source: form.source,
+      category: 'other',
       paymentMethod: form.paymentMethod,
       date: form.date,
       note: form.note.trim(),
-      type: 'expense',
+      type: 'income',
     })
 
-    if (!editing) {
-      setForm({ ...emptyForm, date: todayIso() })
-    }
+    if (!editing) setForm({ ...emptyForm, date: todayIso() })
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm">
-          <span className="mb-1 block text-slate-400">Title</span>
+          <span className="mb-1 block text-slate-400">Income name</span>
           <input
             name="title"
             value={form.title}
             onChange={handleChange}
-            placeholder="Lunch, Uber, electricity..."
+            placeholder="Monthly salary, client payment..."
             className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
             required
           />
@@ -76,23 +75,21 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
             step="1"
             value={form.amount}
             onChange={handleChange}
-            placeholder="250"
+            placeholder="50000"
             className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
             required
           />
         </label>
         <label className="block text-sm">
-          <span className="mb-1 block text-slate-400">Category</span>
+          <span className="mb-1 block text-slate-400">Income source</span>
           <select
-            name="category"
-            value={form.category}
+            name="source"
+            value={form.source}
             onChange={handleChange}
             className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
           >
-            {CATEGORIES.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.label}
-              </option>
+            {INCOME_SOURCES.map((source) => (
+              <option key={source.id} value={source.id}>{source.label}</option>
             ))}
           </select>
         </label>
@@ -136,14 +133,10 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
           type="submit"
           className="rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300"
         >
-          {editing ? 'Save changes' : 'Add expense'}
+          {editing ? 'Save changes' : 'Add income'}
         </button>
         {editing ? (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5"
-          >
+          <button type="button" onClick={onCancel} className="rounded-xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5">
             Cancel
           </button>
         ) : null}
