@@ -235,12 +235,12 @@ export default function App() {
 
   const recentRecurring = recurringExpenses.slice(0, 4)
 
-  const handleAuthSubmit = (form) => {
+  const handleAuthSubmit = async (form) => {
     try {
       if (authMode === 'signin') {
-        signIn({ email: form.email, password: form.password })
+        await signIn({ email: form.email, password: form.password })
       } else {
-        signUp({
+        await signUp({
           name: form.name,
           email: form.email,
           password: form.password,
@@ -248,7 +248,7 @@ export default function App() {
       }
       setAuthError('')
     } catch (error) {
-      setAuthError(error.message)
+      setAuthError(error.message || 'Authentication failed.')
     }
   }
 
@@ -317,7 +317,9 @@ export default function App() {
 
           <button
             type="button"
-            onClick={signOut}
+            onClick={async () => {
+              await signOut()
+            }}
             className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10"
           >
             <LogOut size={16} />

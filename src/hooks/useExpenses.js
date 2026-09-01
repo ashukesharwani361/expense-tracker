@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { currentMonthValue, todayIso } from '../lib/format'
+import { mapSupabaseUser, supabase } from '../lib/supabase'
 
 const AUTH_KEY = 'expense-tracker:auth:v1'
 const USERS_KEY = 'expense-tracker:users:v1'
@@ -200,21 +201,83 @@ function loadSyncState(userId) {
   }
 }
 
+async function syncSupabaseProfileName(name) {
+  if (!supabase || !name) return null
+
+  try {
+    const { data, error } = await supabase.auth.updateUser({
+      data: { full_name: name.trim() },
+    })
+
+    if (error) {
+      return null
+    }
+
+    return data?.user ?? null
+  } catch {
+    return null
+  }
+}
+
 export function useExpenses() {
-  const [currentUser, setCurrentUser] = useState(loadAuth)
-  const [data, setData] = useState(() => loadState(loadAuth().id))
-  const [syncState, setSyncState] = useState(() => loadSyncState(loadAuth().id))
+  const [currentUser, setCurrentUser] = useState(null)
+  const [data, setData] = useState(() => loadState(DEMO_USER.id))
+  const [syncState, setSyncState] = useState(() => loadSyncState(DEMO_USER.id))
+
+  useEffect(() => {
+    if (!supabase) {
+      setCurrentUser(null)
+      setData(loadState(DEMO_USER.id))
+      setSyncState(loadSyncState(DEMO_USER.id))
+      return undefined
+    }
+
+    let active = true
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) return
+
+      if (session?.user) {
+        const nextUser = mapSupabaseUser(session.user)
+        setCurrentUser(nextUser)
+        setData(loadState(nextUser.id))
+        setSyncState(loadSyncState(nextUser.id))
+        return
+      }
+
+      setCurrentUser(null)
+      setData(loadState(DEMO_USER.id))
+      setSyncState(loadSyncState(DEMO_USER.id))
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return
+
+      if (session?.user) {
+        const nextUser = mapSupabaseUser(session.user)
+        setCurrentUser(nextUser)
+        setData(loadState(nextUser.id))
+        setSyncState(loadSyncState(nextUser.id))
+      } else {
+        setCurrentUser(null)
+        setData(loadState(DEMO_USER.id))
+        setSyncState(loadSyncState(DEMO_USER.id))
+      }
+    })
+
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     const userId = currentUser?.id || DEMO_USER.id
     setData(loadState(userId))
     setSyncState(loadSyncState(userId))
   }, [currentUser?.id])
-
-  useEffect(() => {
-    if (!currentUser) return
-    localStorage.setItem(AUTH_KEY, JSON.stringify(currentUser))
-  }, [currentUser])
 
   useEffect(() => {
     const userId = currentUser?.id || DEMO_USER.id
@@ -226,57 +289,107 @@ export function useExpenses() {
     localStorage.setItem(`${SYNC_PREFIX}${userId}`, JSON.stringify(syncState))
   }, [currentUser?.id, syncState])
 
-  const signIn = ({ email, password }) => {
-    const normalizedEmail = email.trim().toLowerCase()
-    const users = loadUsers()
-    const match = users.find(
-      (user) => user.email.toLowerCase() === normalizedEmail && user.password === password,
-    )
-    if (!match) {
-      throw new Error('Incorrect email or password.')
+  const signIn = async ({ email, password }) => {
+    if (!supabase) {
+      throw new Error('Supabase is not configured.')
     }
 
-    const nextUser = { id: match.id, name: match.name, email: match.email }
-    const nextData = loadState(match.id)
-    setCurrentUser(nextUser)
-    setData(nextData)
-    setSyncState(loadSyncState(match.id))
-    return match
+    const normalizedEmail = email.trim().toLowerCase()
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      })
+
+      if (error) {
+        throw new Error(error.message || 'Incorrect email or password.')
+      }
+
+      if (!data?.user) {
+        throw new Error('No user was returned from Supabase.')
+      }
+
+      const profileUser = await syncSupabaseProfileName(
+        data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'User',
+      ) || data.user
+
+      const nextUser = mapSupabaseUser(profileUser)
+      setCurrentUser(nextUser)
+      setData(loadState(nextUser.id))
+      setSyncState(loadSyncState(nextUser.id))
+      return profileUser
+    } catch (error) {
+      if (error instanceof Error && error.message) {
+        throw new Error(error.message)
+      }
+      throw new Error('Unable to sign in.')
+    }
   }
 
-  const signUp = ({ name, email, password }) => {
+  const signUp = async ({ name, email, password }) => {
+    if (!supabase) {
+      throw new Error('Supabase is not configured.')
+    }
+
     const cleanName = name.trim()
     const cleanEmail = email.trim().toLowerCase()
     if (!cleanName || !cleanEmail || !password) {
       throw new Error('Please fill in all fields.')
     }
 
-    const users = loadUsers()
-    if (users.some((user) => user.email.toLowerCase() === cleanEmail)) {
-      throw new Error('An account with that email already exists.')
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: cleanName,
+          },
+        },
+      })
+
+      if (error) {
+        throw new Error(error.message || 'Unable to create your account.')
+      }
+
+      if (!data?.user) {
+        throw new Error('No user was returned from Supabase.')
+      }
+
+      if (!data.session) {
+        throw new Error('Check your email to confirm your account before signing in.')
+      }
+
+      const profileUser = await syncSupabaseProfileName(cleanName) || data.user
+      const nextUser = mapSupabaseUser(profileUser)
+      setCurrentUser(nextUser)
+      setData(loadState(nextUser.id))
+      setSyncState(loadSyncState(nextUser.id))
+      return profileUser
+    } catch (error) {
+      if (error instanceof Error && error.message) {
+        throw new Error(error.message)
+      }
+      throw new Error('Unable to create your account.')
     }
-
-    const newUser = {
-      id: `user-${Date.now()}`,
-      name: cleanName,
-      email: cleanEmail,
-      password,
-    }
-
-    const emptyData = createEmptyData()
-
-    localStorage.setItem(USERS_KEY, JSON.stringify([...users, newUser]))
-    setCurrentUser({ id: newUser.id, name: newUser.name, email: newUser.email })
-    localStorage.setItem(`${DATA_PREFIX}${newUser.id}`, JSON.stringify(emptyData))
-    setData(emptyData)
-    setSyncState({ online: navigator.onLine ?? true, status: 'Ready to sync', lastSyncedAt: null })
-    return newUser
   }
 
-  const signOut = () => {
+  const signOut = async () => {
+    if (!supabase) {
+      setCurrentUser(null)
+      setData(createEmptyData())
+      return
+    }
+
+    try {
+      await supabase.auth.signOut()
+    } catch {
+      // ignore Supabase sign-out errors and continue with UI cleanup
+    }
+
     setCurrentUser(null)
     setData(createEmptyData())
-    localStorage.removeItem(AUTH_KEY)
   }
 
   const addExpense = (expense) => {
