@@ -224,6 +224,44 @@ function mapExpenseToSupabase(item, userId) {
   }
 }
 
+function normalizeSupabaseRecurring(record) {
+  if (!record || typeof record !== 'object') return null
+
+  const amount = Number(record.amount)
+  if (!record.id || !record.title || !Number.isFinite(amount) || amount <= 0) {
+    return null
+  }
+
+  return {
+    id: record.id,
+    title: record.title,
+    amount,
+    category: record.category || 'other',
+    paymentMethod: record.payment_method || record.paymentMethod || 'upi',
+    cadence: record.cadence || 'monthly',
+    nextDate: record.next_date || record.nextDate || todayIso(),
+    isActive: record.is_active !== false,
+    note: record.note || '',
+  }
+}
+
+function mapRecurringToSupabase(item, userId) {
+  const normalized = normalizeRecurring(item)
+  if (!normalized || !userId) return null
+
+  return {
+    title: normalized.title,
+    amount: Number(normalized.amount),
+    category: normalized.category || 'other',
+    payment_method: normalized.paymentMethod || 'upi',
+    cadence: normalized.cadence || 'monthly',
+    next_date: normalized.nextDate || todayIso(),
+    is_active: normalized.isActive !== false,
+    note: normalized.note || '',
+    user_id: userId,
+  }
+}
+
 function loadSyncState(userId) {
   try {
     const raw = localStorage.getItem(`${SYNC_PREFIX}${userId}`)
@@ -316,6 +354,35 @@ export function useExpenses() {
     }
   }, [])
 
+  const fetchUserRecurringExpenses = useCallback(async (userId) => {
+    if (!supabase || !userId) {
+      setData((prev) => ({ ...prev, recurringExpenses: [] }))
+      return []
+    }
+
+    try {
+      const { data: rows, error } = await supabase
+        .from('recurring_expenses')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      const nextRecurring = (Array.isArray(rows) ? rows : [])
+        .map(normalizeSupabaseRecurring)
+        .filter(Boolean)
+
+      setData((prev) => ({ ...prev, recurringExpenses: nextRecurring }))
+      return nextRecurring
+    } catch (error) {
+      setData((prev) => ({ ...prev, recurringExpenses: [] }))
+      return []
+    }
+  }, [])
+
   useEffect(() => {
     if (!supabase) {
       setCurrentUser(null)
@@ -332,9 +399,10 @@ export function useExpenses() {
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData({ ...loadState(nextUser.id), expenses: [] })
+        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [] })
         setSyncState(loadSyncState(nextUser.id))
         await fetchUserExpenses(nextUser.id)
+        await fetchUserRecurringExpenses(nextUser.id)
         return
       }
 
@@ -351,9 +419,10 @@ export function useExpenses() {
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData({ ...loadState(nextUser.id), expenses: [] })
+        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [] })
         setSyncState(loadSyncState(nextUser.id))
         fetchUserExpenses(nextUser.id)
+        fetchUserRecurringExpenses(nextUser.id)
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
@@ -365,7 +434,7 @@ export function useExpenses() {
       active = false
       subscription.unsubscribe()
     }
-  }, [fetchUserExpenses])
+  }, [fetchUserExpenses, fetchUserRecurringExpenses])
 
   useEffect(() => {
     const userId = currentUser?.id || DEMO_USER.id
@@ -639,26 +708,87 @@ export function useExpenses() {
     }))
   }
 
-  const addRecurringExpense = (recurring) => {
-    setData((prev) => ({
-      ...prev,
-      recurringExpenses: [
-        {
-          ...recurring,
-          id: crypto.randomUUID(),
-          isActive: recurring.isActive !== false,
-          nextDate: recurring.nextDate || todayIso(),
-        },
-        ...prev.recurringExpenses,
-      ],
-    }))
+  const addRecurringExpense = async (recurring) => {
+    if (!supabase || !currentUser?.id) {
+      return null
+    }
+
+    // Generate ID if not present
+    const recurringWithId = recurring.id ? recurring : { ...recurring, id: `recurring-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
+
+    const payload = mapRecurringToSupabase(recurringWithId, currentUser.id)
+    if (!payload) {
+      return null
+    }
+
+    try {
+      const { data: inserted, error } = await supabase
+        .from('recurring_expenses')
+        .insert([payload])
+        .select('*')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      const nextRecurring = normalizeSupabaseRecurring(inserted)
+      if (!nextRecurring) {
+        return null
+      }
+
+      setData((prev) => ({
+        ...prev,
+        recurringExpenses: [nextRecurring, ...prev.recurringExpenses],
+      }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense saved to cloud',
+      }))
+      return nextRecurring
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save recurring expense.'
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense sync failed',
+      }))
+      return null
+    }
   }
 
-  const removeRecurringExpense = (id) => {
-    setData((prev) => ({
-      ...prev,
-      recurringExpenses: prev.recurringExpenses.filter((item) => item.id !== id),
-    }))
+  const removeRecurringExpense = async (id) => {
+    if (!supabase || !currentUser?.id) {
+      return false
+    }
+
+    try {
+      const { error } = await supabase
+        .from('recurring_expenses')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', currentUser.id)
+
+      if (error) {
+        throw error
+      }
+
+      setData((prev) => ({
+        ...prev,
+        recurringExpenses: prev.recurringExpenses.filter((item) => item.id !== id),
+      }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense removed from cloud',
+      }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to delete recurring expense.'
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense sync failed',
+      }))
+      return false
+    }
   }
 
   const syncNow = () => {

@@ -445,10 +445,10 @@ export default function App() {
 
             <form
               className="space-y-3"
-              onSubmit={(event) => {
+              onSubmit={async (event) => {
                 event.preventDefault()
                 if (!recurringForm.title.trim() || !recurringForm.amount) return
-                addRecurringExpense({
+                await addRecurringExpense({
                   title: recurringForm.title.trim(),
                   amount: Number(recurringForm.amount),
                   category: recurringForm.category,
