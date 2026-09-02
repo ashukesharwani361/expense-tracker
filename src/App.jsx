@@ -402,9 +402,9 @@ export default function App() {
             </div>
             <form
               className="space-y-3"
-              onSubmit={(event) => {
+              onSubmit={async (event) => {
                 event.preventDefault()
-                setMonthlyBudget(month, budgetInput)
+                await setMonthlyBudget(month, budgetInput)
                 setBudgetInput(String(Math.max(0, Number(budgetInput) || 0)))
               }}
             >

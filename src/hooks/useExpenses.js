@@ -262,6 +262,14 @@ function mapRecurringToSupabase(item, userId) {
   }
 }
 
+function normalizeSupabaseMonthlyBudget(record) {
+  if (!record || typeof record !== 'object') return null
+  const month = record.month
+  const amount = Number(record.amount)
+  if (!month || !Number.isFinite(amount)) return null
+  return { month, amount }
+}
+
 function loadSyncState(userId) {
   try {
     const raw = localStorage.getItem(`${SYNC_PREFIX}${userId}`)
@@ -383,6 +391,40 @@ export function useExpenses() {
     }
   }, [])
 
+  const fetchUserMonthlyBudgets = useCallback(async (userId) => {
+    if (!supabase || !userId) {
+      setData((prev) => ({ ...prev, monthlyBudgets: {} }))
+      return {}
+    }
+
+    try {
+      const { data: rows, error } = await supabase
+        .from('monthly_budgets')
+        .select('month, amount')
+        .eq('user_id', userId)
+
+      if (error) {
+        throw error
+      }
+
+      const monthlyBudgets = {}
+      if (Array.isArray(rows)) {
+        rows.forEach((row) => {
+          const normalized = normalizeSupabaseMonthlyBudget(row)
+          if (normalized) {
+            monthlyBudgets[normalized.month] = normalized.amount
+          }
+        })
+      }
+
+      setData((prev) => ({ ...prev, monthlyBudgets }))
+      return monthlyBudgets
+    } catch (error) {
+      setData((prev) => ({ ...prev, monthlyBudgets: {} }))
+      return {}
+    }
+  }, [])
+
   useEffect(() => {
     if (!supabase) {
       setCurrentUser(null)
@@ -399,10 +441,11 @@ export function useExpenses() {
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [] })
+        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState(nextUser.id))
         await fetchUserExpenses(nextUser.id)
         await fetchUserRecurringExpenses(nextUser.id)
+        await fetchUserMonthlyBudgets(nextUser.id)
         return
       }
 
@@ -419,10 +462,11 @@ export function useExpenses() {
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [] })
+        setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState(nextUser.id))
         fetchUserExpenses(nextUser.id)
         fetchUserRecurringExpenses(nextUser.id)
+        fetchUserMonthlyBudgets(nextUser.id)
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
@@ -434,7 +478,7 @@ export function useExpenses() {
       active = false
       subscription.unsubscribe()
     }
-  }, [fetchUserExpenses, fetchUserRecurringExpenses])
+  }, [fetchUserExpenses, fetchUserRecurringExpenses, fetchUserMonthlyBudgets])
 
   useEffect(() => {
     const userId = currentUser?.id || DEMO_USER.id
@@ -698,14 +742,51 @@ export function useExpenses() {
     }
   }
 
-  const setMonthlyBudget = (month, value) => {
-    setData((prev) => ({
-      ...prev,
-      monthlyBudgets: {
-        ...prev.monthlyBudgets,
-        [month]: Math.max(0, Number(value) || 0),
-      },
-    }))
+  const setMonthlyBudget = async (month, value) => {
+    if (!supabase || !currentUser?.id) {
+      return false
+    }
+
+    const amount = Math.max(0, Number(value) || 0)
+
+    try {
+      const { error } = await supabase
+        .from('monthly_budgets')
+        .upsert(
+          {
+            user_id: currentUser.id,
+            month,
+            amount,
+          },
+          {
+            onConflict: 'user_id,month',
+          }
+        )
+
+      if (error) {
+        throw error
+      }
+
+      setData((prev) => ({
+        ...prev,
+        monthlyBudgets: {
+          ...prev.monthlyBudgets,
+          [month]: amount,
+        },
+      }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Budget saved to cloud',
+      }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save budget.'
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Budget sync failed',
+      }))
+      return false
+    }
   }
 
   const addRecurringExpense = async (recurring) => {
