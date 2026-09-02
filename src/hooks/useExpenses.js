@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { currentMonthValue, todayIso } from '../lib/format'
 import { mapSupabaseUser, supabase } from '../lib/supabase'
 
@@ -156,14 +156,19 @@ function loadState(userId) {
     const raw = localStorage.getItem(key)
     if (!raw) {
       const seeded = userId === DEMO_USER.id ? createSampleData() : createEmptyData()
-      localStorage.setItem(key, JSON.stringify(seeded))
-      return seeded
+      const persisted = {
+        ...seeded,
+        expenses: [],
+      }
+      localStorage.setItem(key, JSON.stringify(persisted))
+      return {
+        expenses: [],
+        monthlyBudgets: seeded.monthlyBudgets,
+        recurringExpenses: seeded.recurringExpenses,
+      }
     }
 
     const parsed = JSON.parse(raw)
-    const expenses = (Array.isArray(parsed.expenses) ? parsed.expenses : [])
-      .map(normalizeTransaction)
-      .filter(Boolean)
     const monthlyBudgets = parsed.monthlyBudgets && typeof parsed.monthlyBudgets === 'object'
       ? parsed.monthlyBudgets
       : {}
@@ -172,12 +177,50 @@ function loadState(userId) {
       .filter(Boolean)
 
     return {
-      expenses,
+      expenses: [],
       monthlyBudgets,
       recurringExpenses,
     }
   } catch {
     return createEmptyData()
+  }
+}
+
+function normalizeSupabaseExpense(record) {
+  if (!record || typeof record !== 'object') return null
+
+  const amount = Number(record.amount)
+  if (!record.id || !record.title || !record.date || !Number.isFinite(amount) || amount <= 0) {
+    return null
+  }
+
+  return {
+    id: record.id,
+    title: record.title,
+    amount,
+    category: record.category || 'other',
+    paymentMethod: record.payment_method || record.paymentMethod || 'other',
+    date: record.date,
+    note: record.note || '',
+    type: record.type === 'income' ? 'income' : 'expense',
+    source: record.source || (record.type === 'income' ? record.category : null) || 'other',
+  }
+}
+
+function mapExpenseToSupabase(item, userId) {
+  const normalized = normalizeTransaction(item)
+  if (!normalized || !userId) return null
+
+  return {
+    title: normalized.title,
+    amount: Number(normalized.amount),
+    category: normalized.category || 'other',
+    payment_method: normalized.paymentMethod || 'other',
+    date: normalized.date,
+    note: normalized.note || '',
+    type: normalized.type === 'income' ? 'income' : 'expense',
+    source: normalized.source || (normalized.type === 'income' ? normalized.category : null) || 'other',
+    user_id: userId,
   }
 }
 
@@ -223,6 +266,55 @@ export function useExpenses() {
   const [currentUser, setCurrentUser] = useState(null)
   const [data, setData] = useState(() => loadState(DEMO_USER.id))
   const [syncState, setSyncState] = useState(() => loadSyncState(DEMO_USER.id))
+  const [isExpensesLoading, setIsExpensesLoading] = useState(false)
+  const [expensesError, setExpensesError] = useState(null)
+
+  const fetchUserExpenses = useCallback(async (userId) => {
+    if (!supabase || !userId) {
+      setExpensesError(null)
+      setIsExpensesLoading(false)
+      setData((prev) => ({ ...prev, expenses: [] }))
+      return []
+    }
+
+    setIsExpensesLoading(true)
+    setExpensesError(null)
+
+    try {
+      const { data: rows, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('user_id', userId)
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      const nextExpenses = (Array.isArray(rows) ? rows : [])
+        .map(normalizeSupabaseExpense)
+        .filter(Boolean)
+
+      setData((prev) => ({ ...prev, expenses: nextExpenses }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Synced to cloud',
+      }))
+      return nextExpenses
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load expenses.'
+      setExpensesError(message)
+      setData((prev) => ({ ...prev, expenses: [] }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense sync failed',
+      }))
+      return []
+    } finally {
+      setIsExpensesLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!supabase) {
@@ -234,14 +326,15 @@ export function useExpenses() {
 
     let active = true
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!active) return
 
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData(loadState(nextUser.id))
+        setData({ ...loadState(nextUser.id), expenses: [] })
         setSyncState(loadSyncState(nextUser.id))
+        await fetchUserExpenses(nextUser.id)
         return
       }
 
@@ -258,8 +351,9 @@ export function useExpenses() {
       if (session?.user) {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
-        setData(loadState(nextUser.id))
+        setData({ ...loadState(nextUser.id), expenses: [] })
         setSyncState(loadSyncState(nextUser.id))
+        fetchUserExpenses(nextUser.id)
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
@@ -271,17 +365,15 @@ export function useExpenses() {
       active = false
       subscription.unsubscribe()
     }
-  }, [])
+  }, [fetchUserExpenses])
 
   useEffect(() => {
     const userId = currentUser?.id || DEMO_USER.id
-    setData(loadState(userId))
-    setSyncState(loadSyncState(userId))
-  }, [currentUser?.id])
-
-  useEffect(() => {
-    const userId = currentUser?.id || DEMO_USER.id
-    localStorage.setItem(`${DATA_PREFIX}${userId}`, JSON.stringify(data))
+    const persisted = {
+      ...data,
+      expenses: [],
+    }
+    localStorage.setItem(`${DATA_PREFIX}${userId}`, JSON.stringify(persisted))
   }, [currentUser?.id, data])
 
   useEffect(() => {
@@ -316,8 +408,9 @@ export function useExpenses() {
 
       const nextUser = mapSupabaseUser(profileUser)
       setCurrentUser(nextUser)
-      setData(loadState(nextUser.id))
+      setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState(nextUser.id))
+      await fetchUserExpenses(nextUser.id)
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
@@ -364,8 +457,9 @@ export function useExpenses() {
       const profileUser = await syncSupabaseProfileName(cleanName) || data.user
       const nextUser = mapSupabaseUser(profileUser)
       setCurrentUser(nextUser)
-      setData(loadState(nextUser.id))
+      setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState(nextUser.id))
+      await fetchUserExpenses(nextUser.id)
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
@@ -390,29 +484,149 @@ export function useExpenses() {
 
     setCurrentUser(null)
     setData(createEmptyData())
+    setExpensesError(null)
+    setIsExpensesLoading(false)
   }
 
-  const addExpense = (expense) => {
-    setData((prev) => ({
-      ...prev,
-      expenses: [{ ...expense, id: crypto.randomUUID() }, ...prev.expenses],
-    }))
+  const addExpense = async (expense) => {
+    if (!supabase || !currentUser?.id) {
+      return null
+    }
+
+    // Generate ID if not present
+    const expenseWithId = expense.id ? expense : { ...expense, id: `expense-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
+    
+    const payload = mapExpenseToSupabase(expenseWithId, currentUser.id)
+    if (!payload) {
+      return null
+    }
+
+    try {
+      const { data: inserted, error } = await supabase
+        .from('expenses')
+        .insert([payload])
+        .select('*')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      const nextExpense = normalizeSupabaseExpense(inserted)
+      if (!nextExpense) {
+        return null
+      }
+
+      setData((prev) => ({
+        ...prev,
+        expenses: [nextExpense, ...prev.expenses.filter((item) => item.id !== nextExpense.id)],
+      }))
+      setExpensesError(null)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense saved to cloud',
+      }))
+      return nextExpense
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save expense.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense sync failed',
+      }))
+      return null
+    }
   }
 
-  const updateExpense = (id, updates) => {
-    setData((prev) => ({
-      ...prev,
-      expenses: prev.expenses.map((item) =>
-        item.id === id ? { ...item, ...updates } : item,
-      ),
-    }))
+  const updateExpense = async (id, updates) => {
+    if (!supabase || !currentUser?.id || !id) {
+      return null
+    }
+
+    const existing = data.expenses.find((item) => item.id === id)
+    if (!existing) {
+      return null
+    }
+
+    const payload = mapExpenseToSupabase({ ...existing, ...updates }, currentUser.id)
+    if (!payload) {
+      return null
+    }
+
+    try {
+      const { data: updated, error } = await supabase
+        .from('expenses')
+        .update(payload)
+        .eq('id', id)
+        .eq('user_id', currentUser.id)
+        .select('*')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      const nextExpense = normalizeSupabaseExpense(updated)
+      if (!nextExpense) {
+        return null
+      }
+
+      setData((prev) => ({
+        ...prev,
+        expenses: prev.expenses.map((item) => item.id === id ? nextExpense : item),
+      }))
+      setExpensesError(null)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense updated in cloud',
+      }))
+      return nextExpense
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to update expense.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense sync failed',
+      }))
+      return null
+    }
   }
 
-  const deleteExpense = (id) => {
-    setData((prev) => ({
-      ...prev,
-      expenses: prev.expenses.filter((item) => item.id !== id),
-    }))
+  const deleteExpense = async (id) => {
+    if (!supabase || !currentUser?.id || !id) {
+      return false
+    }
+
+    try {
+      const { error } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', currentUser.id)
+
+      if (error) {
+        throw error
+      }
+
+      setData((prev) => ({
+        ...prev,
+        expenses: prev.expenses.filter((item) => item.id !== id),
+      }))
+      setExpensesError(null)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense removed from cloud',
+      }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to delete expense.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Expense sync failed',
+      }))
+      return false
+    }
   }
 
   const setMonthlyBudget = (month, value) => {
@@ -480,5 +694,7 @@ export function useExpenses() {
     syncNow,
     syncStatus: syncState,
     byId,
+    isExpensesLoading,
+    expensesError,
   }
 }
