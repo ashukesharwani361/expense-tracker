@@ -2,11 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { currentMonthValue, todayIso } from '../lib/format'
 import { mapSupabaseUser, supabase } from '../lib/supabase'
 
-const AUTH_KEY = 'expense-tracker:auth:v1'
-const USERS_KEY = 'expense-tracker:users:v1'
-const DATA_PREFIX = 'expense-tracker:data:v1:'
-const SYNC_PREFIX = 'expense-tracker:sync:v1:'
-
 const DEMO_USER = {
   id: 'demo-user',
   name: 'Demo User',
@@ -125,64 +120,14 @@ function createSampleData() {
   }
 }
 
-function loadUsers() {
-  try {
-    const raw = localStorage.getItem(USERS_KEY)
-    const parsed = raw ? JSON.parse(raw) : null
-    const users = Array.isArray(parsed) && parsed.length > 0 ? parsed : [DEMO_USER]
-    if (!raw) {
-      localStorage.setItem(USERS_KEY, JSON.stringify(users))
-    }
-    return users
-  } catch {
-    return [DEMO_USER]
-  }
-}
-
-function loadAuth() {
-  try {
-    const raw = localStorage.getItem(AUTH_KEY)
-    if (!raw) return DEMO_USER
-    const parsed = JSON.parse(raw)
-    return parsed && parsed.email ? parsed : DEMO_USER
-  } catch {
-    return DEMO_USER
-  }
-}
-
 function loadState(userId) {
-  try {
-    const key = `${DATA_PREFIX}${userId}`
-    const raw = localStorage.getItem(key)
-    if (!raw) {
-      const seeded = userId === DEMO_USER.id ? createSampleData() : createEmptyData()
-      const persisted = {
-        ...seeded,
-        expenses: [],
-      }
-      localStorage.setItem(key, JSON.stringify(persisted))
-      return {
-        expenses: [],
-        monthlyBudgets: seeded.monthlyBudgets,
-        recurringExpenses: seeded.recurringExpenses,
-      }
-    }
-
-    const parsed = JSON.parse(raw)
-    const monthlyBudgets = parsed.monthlyBudgets && typeof parsed.monthlyBudgets === 'object'
-      ? parsed.monthlyBudgets
-      : {}
-    const recurringExpenses = (Array.isArray(parsed.recurringExpenses) ? parsed.recurringExpenses : [])
-      .map(normalizeRecurring)
-      .filter(Boolean)
-
-    return {
-      expenses: [],
-      monthlyBudgets,
-      recurringExpenses,
-    }
-  } catch {
-    return createEmptyData()
+  // Return seed data for demo user, empty data for others
+  // Actual cloud data is fetched separately from Supabase
+  const seeded = userId === DEMO_USER.id ? createSampleData() : createEmptyData()
+  return {
+    expenses: [],
+    monthlyBudgets: seeded.monthlyBudgets,
+    recurringExpenses: seeded.recurringExpenses,
   }
 }
 
@@ -270,23 +215,11 @@ function normalizeSupabaseMonthlyBudget(record) {
   return { month, amount }
 }
 
-function loadSyncState(userId) {
-  try {
-    const raw = localStorage.getItem(`${SYNC_PREFIX}${userId}`)
-    if (!raw) {
-      return {
-        online: navigator.onLine ?? true,
-        status: 'Ready to sync',
-        lastSyncedAt: null,
-      }
-    }
-    return JSON.parse(raw)
-  } catch {
-    return {
-      online: navigator.onLine ?? true,
-      status: 'Ready to sync',
-      lastSyncedAt: null,
-    }
+function loadSyncState() {
+  return {
+    online: navigator.onLine ?? true,
+    status: 'Ready to sync',
+    lastSyncedAt: null,
   }
 }
 
@@ -311,7 +244,7 @@ async function syncSupabaseProfileName(name) {
 export function useExpenses() {
   const [currentUser, setCurrentUser] = useState(null)
   const [data, setData] = useState(() => loadState(DEMO_USER.id))
-  const [syncState, setSyncState] = useState(() => loadSyncState(DEMO_USER.id))
+  const [syncState, setSyncState] = useState(() => loadSyncState())
   const [isExpensesLoading, setIsExpensesLoading] = useState(false)
   const [expensesError, setExpensesError] = useState(null)
 
@@ -429,7 +362,7 @@ export function useExpenses() {
     if (!supabase) {
       setCurrentUser(null)
       setData(loadState(DEMO_USER.id))
-      setSyncState(loadSyncState(DEMO_USER.id))
+      setSyncState(loadSyncState())
       return undefined
     }
 
@@ -442,7 +375,7 @@ export function useExpenses() {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
-        setSyncState(loadSyncState(nextUser.id))
+        setSyncState(loadSyncState())
         await fetchUserExpenses(nextUser.id)
         await fetchUserRecurringExpenses(nextUser.id)
         await fetchUserMonthlyBudgets(nextUser.id)
@@ -451,7 +384,7 @@ export function useExpenses() {
 
       setCurrentUser(null)
       setData(loadState(DEMO_USER.id))
-      setSyncState(loadSyncState(DEMO_USER.id))
+      setSyncState(loadSyncState())
     })
 
     const {
@@ -463,14 +396,14 @@ export function useExpenses() {
         const nextUser = mapSupabaseUser(session.user)
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
-        setSyncState(loadSyncState(nextUser.id))
+        setSyncState(loadSyncState())
         fetchUserExpenses(nextUser.id)
         fetchUserRecurringExpenses(nextUser.id)
         fetchUserMonthlyBudgets(nextUser.id)
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
-        setSyncState(loadSyncState(DEMO_USER.id))
+        setSyncState(loadSyncState())
       }
     })
 
@@ -479,20 +412,6 @@ export function useExpenses() {
       subscription.unsubscribe()
     }
   }, [fetchUserExpenses, fetchUserRecurringExpenses, fetchUserMonthlyBudgets])
-
-  useEffect(() => {
-    const userId = currentUser?.id || DEMO_USER.id
-    const persisted = {
-      ...data,
-      expenses: [],
-    }
-    localStorage.setItem(`${DATA_PREFIX}${userId}`, JSON.stringify(persisted))
-  }, [currentUser?.id, data])
-
-  useEffect(() => {
-    const userId = currentUser?.id || DEMO_USER.id
-    localStorage.setItem(`${SYNC_PREFIX}${userId}`, JSON.stringify(syncState))
-  }, [currentUser?.id, syncState])
 
   const signIn = async ({ email, password }) => {
     if (!supabase) {
@@ -522,7 +441,7 @@ export function useExpenses() {
       const nextUser = mapSupabaseUser(profileUser)
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
-      setSyncState(loadSyncState(nextUser.id))
+      setSyncState(loadSyncState())
       await fetchUserExpenses(nextUser.id)
       return profileUser
     } catch (error) {
@@ -571,7 +490,7 @@ export function useExpenses() {
       const nextUser = mapSupabaseUser(profileUser)
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
-      setSyncState(loadSyncState(nextUser.id))
+      setSyncState(loadSyncState())
       await fetchUserExpenses(nextUser.id)
       return profileUser
     } catch (error) {
