@@ -4,9 +4,6 @@ import { mapSupabaseUser, supabase } from '../lib/supabase'
 
 const DEMO_USER = {
   id: 'demo-user',
-  name: 'Demo User',
-  email: 'demo@finora.app',
-  password: 'demo123',
 }
 
 function normalizeTransaction(item) {

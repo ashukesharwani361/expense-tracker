@@ -31,8 +31,8 @@ import {
 function AuthScreen({ onSubmit, isSignUp, setIsSignUp, error }) {
   const [form, setForm] = useState({
     name: '',
-    email: 'demo@finora.app',
-    password: 'demo123',
+    email: '',
+    password: '',
   })
 
   return (
@@ -119,10 +119,6 @@ function AuthScreen({ onSubmit, isSignUp, setIsSignUp, error }) {
           </button>
         </form>
 
-        <div className="mt-5 flex items-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-3 text-sm text-emerald-200">
-          <Shield size={16} />
-          Demo login: demo@finora.app / demo123
-        </div>
       </div>
     </div>
   )
