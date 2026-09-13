@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { currentMonthValue, todayIso } from '../lib/format'
+import {
+  isOccurrenceDue,
+  nextRecurringOccurrence,
+  recurringOccurrenceId,
+} from '../lib/recurrence'
 import { mapSupabaseUser, supabase } from '../lib/supabase'
 
 const DEMO_USER = {
   id: 'demo-user',
 }
+
+const MAX_RECURRING_OCCURRENCES_PER_DEFINITION = 520
 
 function normalizeTransaction(item) {
   if (!item || typeof item !== 'object') return null
@@ -220,6 +227,13 @@ function loadSyncState() {
   }
 }
 
+function isKnownOccurrenceDuplicate(error, occurrenceId) {
+  if (error?.code !== '23505') return false
+
+  const details = `${error.details || ''} ${error.message || ''}`
+  return details.includes('expenses_pkey') || details.includes(`Key (id)=(${occurrenceId})`)
+}
+
 async function syncSupabaseProfileName(name) {
   if (!supabase || !name) return null
 
@@ -316,7 +330,13 @@ export function useExpenses() {
       setData((prev) => ({ ...prev, recurringExpenses: nextRecurring }))
       return nextRecurring
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load recurring expenses.'
+      setExpensesError(message)
       setData((prev) => ({ ...prev, recurringExpenses: [] }))
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense sync failed',
+      }))
       return []
     }
   }, [])
@@ -355,6 +375,131 @@ export function useExpenses() {
     }
   }, [])
 
+  const processRecurringExpenses = useCallback(async (userId, recurringDefinitions) => {
+    if (!supabase || !userId || !Array.isArray(recurringDefinitions)) {
+      return false
+    }
+
+    let processedAny = false
+    let requiresRefresh = false
+
+    try {
+      for (const definition of recurringDefinitions) {
+        let current = definition
+        let occurrenceAttempts = 0
+
+        while (current.isActive && isOccurrenceDue(current.nextDate)) {
+          if (occurrenceAttempts >= MAX_RECURRING_OCCURRENCES_PER_DEFINITION) {
+            throw new Error('Recurring expense processing limit reached before the schedule became current.')
+          }
+
+          occurrenceAttempts += 1
+          requiresRefresh = true
+          const occurrenceDate = current.nextDate
+          const occurrenceId = await recurringOccurrenceId({
+            userId,
+            recurringExpenseId: current.id,
+            occurrenceDate,
+          })
+          const payload = mapExpenseToSupabase({
+            id: occurrenceId,
+            title: current.title,
+            amount: current.amount,
+            category: current.category,
+            paymentMethod: current.paymentMethod,
+            date: occurrenceDate,
+            note: current.note,
+            type: 'expense',
+          }, userId)
+
+          if (!payload) {
+            throw new Error('Unable to prepare recurring expense occurrence.')
+          }
+
+          const { error: insertError } = await supabase
+            .from('expenses')
+            .insert([{ ...payload, id: occurrenceId }])
+
+          if (insertError && !isKnownOccurrenceDuplicate(insertError, occurrenceId)) {
+            throw new Error(insertError.message || 'Unable to create recurring expense occurrence.')
+          }
+
+          const nextDate = nextRecurringOccurrence(occurrenceDate, current.cadence)
+          const { data: updatedRow, error: updateError } = await supabase
+            .from('recurring_expenses')
+            .update({ next_date: nextDate })
+            .eq('id', current.id)
+            .eq('user_id', userId)
+            .eq('next_date', occurrenceDate)
+            .select('*')
+            .maybeSingle()
+
+          if (updateError) {
+            throw new Error(updateError.message || 'Unable to advance recurring expense schedule.')
+          }
+
+          if (!updatedRow) {
+            const { data: latestRow, error: latestError } = await supabase
+              .from('recurring_expenses')
+              .select('*')
+              .eq('id', current.id)
+              .eq('user_id', userId)
+              .maybeSingle()
+
+            if (latestError) {
+              throw new Error(latestError.message || 'Unable to reconcile recurring expense schedule.')
+            }
+
+            if (!latestRow) break
+
+            const latest = normalizeSupabaseRecurring(latestRow)
+            if (!latest || latest.nextDate === occurrenceDate) {
+              throw new Error('Recurring expense schedule could not be advanced safely.')
+            }
+
+            current = latest
+            continue
+          }
+
+          const updated = normalizeSupabaseRecurring(updatedRow)
+          if (!updated) {
+            throw new Error('Recurring expense schedule returned invalid data.')
+          }
+
+          current = updated
+          processedAny = true
+        }
+      }
+
+      if (requiresRefresh) {
+        await fetchUserExpenses(userId)
+        await fetchUserRecurringExpenses(userId)
+        setExpensesError(null)
+        setSyncState((prev) => ({
+          ...prev,
+          status: processedAny ? 'Recurring expenses processed' : 'Synced to cloud',
+        }))
+      }
+
+      return processedAny
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recurring expense processing failed.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense processing failed',
+      }))
+      return false
+    }
+  }, [fetchUserExpenses, fetchUserRecurringExpenses])
+
+  const loadUserData = useCallback(async (userId) => {
+    await fetchUserExpenses(userId)
+    const recurringDefinitions = await fetchUserRecurringExpenses(userId)
+    await fetchUserMonthlyBudgets(userId)
+    await processRecurringExpenses(userId, recurringDefinitions)
+  }, [fetchUserExpenses, fetchUserMonthlyBudgets, fetchUserRecurringExpenses, processRecurringExpenses])
+
   useEffect(() => {
     if (!supabase) {
       setCurrentUser(null)
@@ -373,9 +518,7 @@ export function useExpenses() {
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState())
-        await fetchUserExpenses(nextUser.id)
-        await fetchUserRecurringExpenses(nextUser.id)
-        await fetchUserMonthlyBudgets(nextUser.id)
+        await loadUserData(nextUser.id)
         return
       }
 
@@ -394,9 +537,7 @@ export function useExpenses() {
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState())
-        fetchUserExpenses(nextUser.id)
-        fetchUserRecurringExpenses(nextUser.id)
-        fetchUserMonthlyBudgets(nextUser.id)
+        loadUserData(nextUser.id)
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
@@ -408,7 +549,7 @@ export function useExpenses() {
       active = false
       subscription.unsubscribe()
     }
-  }, [fetchUserExpenses, fetchUserRecurringExpenses, fetchUserMonthlyBudgets])
+  }, [loadUserData])
 
   const signIn = async ({ email, password }) => {
     if (!supabase) {
@@ -439,7 +580,7 @@ export function useExpenses() {
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState())
-      await fetchUserExpenses(nextUser.id)
+      await loadUserData(nextUser.id)
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
@@ -488,7 +629,7 @@ export function useExpenses() {
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState())
-      await fetchUserExpenses(nextUser.id)
+      await loadUserData(nextUser.id)
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
