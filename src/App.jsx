@@ -174,12 +174,27 @@ export default function App() {
     note: '',
   })
 
-  useEffect(() => {
-    const monthlyBudget = Number(monthlyBudgets[month] || monthlyBudgets.legacy || 0)
-    setBudgetInput(String(monthlyBudget || ''))
-  }, [month, monthlyBudgets])
+  const isBudgetSet = monthlyBudgets[month] !== undefined
+  const monthlyBudget = Number(monthlyBudgets[month] || 0)
 
-  const monthlyBudget = Number(monthlyBudgets[month] || monthlyBudgets.legacy || 0)
+  useEffect(() => {
+    setBudgetInput(isBudgetSet ? String(monthlyBudget || '') : '')
+  }, [month, monthlyBudgets, isBudgetSet, monthlyBudget])
+
+  const previousMonth = useMemo(() => {
+    const [year, monthNum] = month.split('-').map(Number)
+    const prevDate = new Date(year, monthNum - 2, 1)
+    return `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`
+  }, [month])
+
+  const previousBudget = monthlyBudgets[previousMonth]
+
+  const handleCopyPreviousBudget = async () => {
+    if (previousBudget !== undefined) {
+      await setMonthlyBudget(month, previousBudget)
+      setBudgetInput(String(previousBudget))
+    }
+  }
 
   const filtered = useMemo(() => {
     return expenses.filter((expense) => {
@@ -206,6 +221,8 @@ export default function App() {
     .reduce((sum, item) => sum + Number(item.amount), 0)
   const balance = monthIncome - total
   const remaining = monthlyBudget - total
+  const percentUsed = isBudgetSet && monthlyBudget > 0 ? Math.round((total / monthlyBudget) * 100) : 0
+  const budgetStatus = percentUsed >= 100 ? 'exceeded' : percentUsed >= 80 ? 'warning' : 'normal'
   const categoryTotals = monthExpenses.filter((item) => item.type !== 'income').reduce((acc, item) => {
     acc[item.category] = (acc[item.category] || 0) + Number(item.amount)
     return acc
@@ -394,6 +411,7 @@ export default function App() {
           budget={monthlyBudget}
           remaining={remaining}
           balance={balance}
+          isBudgetSet={isBudgetSet}
         />
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -450,14 +468,86 @@ export default function App() {
 
         <div className="space-y-6">
           <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
-            <h2 className="mb-4 text-lg font-semibold">Budget overview</h2>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Budget overview</h2>
+              {isBudgetSet ? (
+                <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                  budgetStatus === 'exceeded'
+                    ? 'border-red-400/30 bg-red-400/10 text-red-300'
+                    : budgetStatus === 'warning'
+                    ? 'border-amber-400/30 bg-amber-400/10 text-amber-300'
+                    : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                }`}>
+                  {budgetStatus === 'exceeded' ? 'Exceeded' : budgetStatus === 'warning' ? 'Warning' : 'On track'}
+                </span>
+              ) : (
+                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-slate-400">
+                  Not set
+                </span>
+              )}
+            </div>
+
             <div className="mb-4 flex items-center justify-between rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-3">
               <div>
                 <p className="text-sm text-slate-400">Monthly limit</p>
-                <p className="text-2xl font-semibold">₹{monthlyBudget.toLocaleString('en-IN')}</p>
+                <p className="text-2xl font-semibold">
+                  {isBudgetSet ? `₹${monthlyBudget.toLocaleString('en-IN')}` : 'Not set'}
+                </p>
               </div>
               <PiggyBank className="text-emerald-300" />
             </div>
+
+            {isBudgetSet ? (
+              <div className="mb-4 space-y-2.5 rounded-2xl border border-white/10 bg-slate-950/40 p-3.5">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Budget progress</span>
+                  <span className={`font-semibold ${
+                    budgetStatus === 'exceeded'
+                      ? 'text-red-300'
+                      : budgetStatus === 'warning'
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  }`}>
+                    {percentUsed}%
+                  </span>
+                </div>
+
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      budgetStatus === 'exceeded'
+                        ? 'bg-red-400'
+                        : budgetStatus === 'warning'
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-400'
+                    }`}
+                    style={{ width: `${Math.min(percentUsed, 100)}%` }}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                    budgetStatus === 'exceeded'
+                      ? 'border-red-400/30 bg-red-400/10 text-red-300'
+                      : budgetStatus === 'warning'
+                      ? 'border-amber-400/30 bg-amber-400/10 text-amber-300'
+                      : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                  }`}>
+                    {percentUsed}% used
+                  </span>
+                  <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                    remaining < 0
+                      ? 'border-red-400/30 bg-red-400/10 text-red-300'
+                      : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                  }`}>
+                    {remaining < 0
+                      ? `Overspend: ₹${Math.abs(remaining).toLocaleString('en-IN')}`
+                      : `Remaining: ₹${remaining.toLocaleString('en-IN')}`}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
             <form
               className="space-y-3"
               onSubmit={async (event) => {
@@ -481,6 +571,29 @@ export default function App() {
                 </div>
               </label>
             </form>
+
+            {!isBudgetSet && (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl border border-dashed border-white/15 bg-white/5 p-3 text-sm">
+                <span className="text-xs text-slate-400">
+                  {previousBudget !== undefined
+                    ? `Previous (${monthLabel(previousMonth)}): ₹${Number(previousBudget).toLocaleString('en-IN')}`
+                    : `No budget set for ${monthLabel(month)}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyPreviousBudget}
+                  disabled={previousBudget === undefined}
+                  className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                    previousBudget !== undefined
+                      ? 'bg-emerald-400 text-slate-950 hover:bg-emerald-300'
+                      : 'bg-white/10 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  Copy from previous month
+                </button>
+              </div>
+            )}
+
             <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 p-3 text-sm text-slate-300">
               <div className="mb-1 flex justify-between">
                 <span>Spent</span>
@@ -489,7 +602,7 @@ export default function App() {
               <div className="flex justify-between">
                 <span>Remaining</span>
                 <span className={remaining < 0 ? 'font-medium text-red-300' : 'font-medium text-emerald-300'}>
-                  ₹{remaining.toLocaleString('en-IN')}
+                  {isBudgetSet ? `₹${remaining.toLocaleString('en-IN')}` : 'Not set'}
                 </span>
               </div>
             </div>
@@ -731,7 +844,7 @@ export default function App() {
                 <h3 className="text-base font-semibold">Category breakdown</h3>
                 <ArrowDownLeft size={16} className="text-orange-300" />
               </div>
-              <CategoryBars totals={categoryTotals} maxTotal={maxCategory} />
+              <CategoryBars totals={categoryTotals} maxTotal={maxCategory} totalMonthlySpend={total} />
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
