@@ -147,6 +147,7 @@ export default function App() {
     deleteExpense,
     setMonthlyBudget,
     addRecurringExpense,
+    updateRecurringExpense,
     removeRecurringExpense,
     syncNow,
     syncStatus,
@@ -162,6 +163,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState('signin')
   const [authError, setAuthError] = useState('')
   const [budgetInput, setBudgetInput] = useState('')
+  const [editingRecurring, setEditingRecurring] = useState(null)
   const [recurringForm, setRecurringForm] = useState({
     title: '',
     amount: '',
@@ -229,7 +231,67 @@ export default function App() {
       .reverse()
   }, [expenses])
 
-  const recentRecurring = recurringExpenses.slice(0, 4)
+  const handleStartRecurringEdit = (item) => {
+    setEditingRecurring(item)
+    setRecurringForm({
+      title: item.title,
+      amount: String(item.amount),
+      category: item.category,
+      paymentMethod: item.paymentMethod,
+      cadence: item.cadence,
+      nextDate: item.nextDate,
+      note: item.note || '',
+    })
+  }
+
+  const handleCancelRecurringEdit = () => {
+    setEditingRecurring(null)
+    setRecurringForm({
+      title: '',
+      amount: '',
+      category: 'food',
+      paymentMethod: 'upi',
+      cadence: 'monthly',
+      nextDate: todayIso(),
+      note: '',
+    })
+  }
+
+  const handleRecurringSubmit = async (event) => {
+    event.preventDefault()
+    const amount = Number(recurringForm.amount)
+    if (!recurringForm.title.trim() || !Number.isFinite(amount) || amount <= 0) return
+
+    const payload = {
+      title: recurringForm.title.trim(),
+      amount,
+      category: recurringForm.category,
+      paymentMethod: recurringForm.paymentMethod,
+      cadence: recurringForm.cadence,
+      nextDate: recurringForm.nextDate,
+      note: recurringForm.note.trim(),
+    }
+
+    if (editingRecurring) {
+      await updateRecurringExpense(editingRecurring.id, payload)
+      setEditingRecurring(null)
+    } else {
+      await addRecurringExpense({
+        ...payload,
+        isActive: true,
+      })
+    }
+
+    setRecurringForm({
+      title: '',
+      amount: '',
+      category: 'food',
+      paymentMethod: 'upi',
+      cadence: 'monthly',
+      nextDate: todayIso(),
+      note: '',
+    })
+  }
 
   const handleAuthSubmit = async (form) => {
     try {
@@ -436,49 +498,29 @@ export default function App() {
           <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
             <div className="mb-4 flex items-center justify-between gap-2">
               <h2 className="text-lg font-semibold">Recurring expenses</h2>
-              <span className="rounded-full bg-emerald-400/10 px-2 py-1 text-xs text-emerald-200">{recurringExpenses.length} active</span>
+              <span className="rounded-full bg-emerald-400/10 px-2 py-1 text-xs text-emerald-200">
+                {recurringExpenses.filter((item) => item.isActive).length} active
+              </span>
             </div>
 
-            <form
-              className="space-y-3"
-              onSubmit={async (event) => {
-                event.preventDefault()
-                if (!recurringForm.title.trim() || !recurringForm.amount) return
-                await addRecurringExpense({
-                  title: recurringForm.title.trim(),
-                  amount: Number(recurringForm.amount),
-                  category: recurringForm.category,
-                  paymentMethod: recurringForm.paymentMethod,
-                  cadence: recurringForm.cadence,
-                  nextDate: recurringForm.nextDate,
-                  note: recurringForm.note.trim(),
-                  isActive: true,
-                })
-                setRecurringForm({
-                  title: '',
-                  amount: '',
-                  category: 'food',
-                  paymentMethod: 'upi',
-                  cadence: 'monthly',
-                  nextDate: todayIso(),
-                  note: '',
-                })
-              }}
-            >
+            <form className="space-y-3" onSubmit={handleRecurringSubmit}>
               <input
                 value={recurringForm.title}
                 onChange={(event) => setRecurringForm((prev) => ({ ...prev, title: event.target.value }))}
                 placeholder="Netflix, gym, rent..."
                 className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
+                required
               />
               <div className="grid gap-3 sm:grid-cols-2">
                 <input
                   type="number"
                   min="1"
+                  step="any"
                   value={recurringForm.amount}
                   onChange={(event) => setRecurringForm((prev) => ({ ...prev, amount: event.target.value }))}
                   placeholder="Amount"
                   className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
+                  required
                 />
                 <select
                   value={recurringForm.cadence}
@@ -510,32 +552,119 @@ export default function App() {
                   ))}
                 </select>
               </div>
-              <div className="flex gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <input
                   type="date"
                   value={recurringForm.nextDate}
                   onChange={(event) => setRecurringForm((prev) => ({ ...prev, nextDate: event.target.value }))}
                   className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
+                  required
                 />
-                <button type="submit" className="rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300">Add</button>
+                <input
+                  value={recurringForm.note}
+                  onChange={(event) => setRecurringForm((prev) => ({ ...prev, note: event.target.value }))}
+                  placeholder="Note (optional)"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 outline-none ring-emerald-400/40 focus:ring-2"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="flex-1 rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300"
+                >
+                  {editingRecurring ? 'Save changes' : 'Add'}
+                </button>
+                {editingRecurring ? (
+                  <button
+                    type="button"
+                    onClick={handleCancelRecurringEdit}
+                    className="rounded-xl border border-white/15 px-4 py-2 text-sm text-slate-300 hover:bg-white/5"
+                  >
+                    Cancel
+                  </button>
+                ) : null}
               </div>
             </form>
 
-            <ul className="mt-4 space-y-2">
-              {recentRecurring.length === 0 ? (
-                <li className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-400">No recurring expenses yet.</li>
-              ) : recentRecurring.map((item) => (
-                <li key={item.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/40 p-3">
-                  <div>
-                    <p className="font-medium">{item.title}</p>
-                    <p className="text-xs text-slate-400">{item.cadence} • {item.nextDate}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-orange-300">₹{Number(item.amount).toLocaleString('en-IN')}</span>
-                    <button type="button" onClick={() => removeRecurringExpense(item.id)} className="rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5">Remove</button>
-                  </div>
+            <ul className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+              {recurringExpenses.length === 0 ? (
+                <li className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-400">
+                  No recurring expenses yet.
                 </li>
-              ))}
+              ) : (
+                recurringExpenses.map((item) => {
+                  const isEditingThis = editingRecurring?.id === item.id
+                  return (
+                    <li
+                      key={item.id}
+                      className={`flex flex-col gap-2 rounded-2xl border p-3 sm:flex-row sm:items-center sm:justify-between transition ${
+                        isEditingThis
+                          ? 'border-emerald-400/40 bg-emerald-400/5'
+                          : 'border-white/10 bg-slate-950/40'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium">{item.title}</p>
+                          <span
+                            className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                              item.isActive
+                                ? 'bg-emerald-400/10 text-emerald-300'
+                                : 'bg-amber-400/10 text-amber-300'
+                            }`}
+                          >
+                            {item.isActive ? 'Active' : 'Paused'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          <span className="capitalize">{item.cadence}</span> • Next: {item.nextDate}
+                          {item.note ? ` • ${item.note}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+                        <span className="font-medium text-orange-300">
+                          ₹{Number(item.amount).toLocaleString('en-IN')}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleStartRecurringEdit(item)}
+                            className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
+                            aria-label={`Edit ${item.title}`}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateRecurringExpense(item.id, { isActive: !item.isActive })}
+                            className={`rounded-lg border px-2 py-1 text-xs transition ${
+                              item.isActive
+                                ? 'border-amber-400/20 text-amber-300 hover:bg-amber-400/10'
+                                : 'border-emerald-400/20 text-emerald-300 hover:bg-emerald-400/10'
+                            }`}
+                            aria-label={`${item.isActive ? 'Pause' : 'Resume'} ${item.title}`}
+                          >
+                            {item.isActive ? 'Pause' : 'Resume'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isEditingThis) {
+                                handleCancelRecurringEdit()
+                              }
+                              removeRecurringExpense(item.id)
+                            }}
+                            className="rounded-lg border border-red-400/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/15"
+                            aria-label={`Remove ${item.title}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  )
+                })
+              )}
             </ul>
           </section>
         </div>

@@ -894,6 +894,63 @@ export function useExpenses() {
     }
   }
 
+  const updateRecurringExpense = async (id, updates) => {
+    if (!supabase || !currentUser?.id || !id) {
+      return null
+    }
+
+    const existing = data.recurringExpenses.find((item) => item.id === id)
+    if (!existing) {
+      return null
+    }
+
+    const merged = { ...existing, ...updates }
+    const payload = mapRecurringToSupabase(merged, currentUser.id)
+    if (!payload) {
+      return null
+    }
+
+    try {
+      const { data: updated, error } = await supabase
+        .from('recurring_expenses')
+        .update(payload)
+        .eq('id', id)
+        .eq('user_id', currentUser.id)
+        .select('*')
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      const nextRecurring = normalizeSupabaseRecurring(updated)
+      if (!nextRecurring) {
+        return null
+      }
+
+      setData((prev) => ({
+        ...prev,
+        recurringExpenses: prev.recurringExpenses.map((item) =>
+          item.id === id ? nextRecurring : item
+        ),
+      }))
+      setExpensesError(null)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense updated in cloud',
+      }))
+      return nextRecurring
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to update recurring expense.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Recurring expense sync failed',
+      }))
+      return null
+    }
+  }
+
   const removeRecurringExpense = async (id) => {
     if (!supabase || !currentUser?.id) {
       return false
@@ -958,6 +1015,7 @@ export function useExpenses() {
     deleteExpense,
     setMonthlyBudget,
     addRecurringExpense,
+    updateRecurringExpense,
     removeRecurringExpense,
     syncNow,
     syncStatus: syncState,
