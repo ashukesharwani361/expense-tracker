@@ -10,7 +10,7 @@ const emptyForm = {
   paymentMethod: 'upi',
 }
 
-export default function ExpenseForm({ onSubmit, editing, onCancel }) {
+export default function ExpenseForm({ onSubmit, editing, onCancel, resetKey, registerResetCallback }) {
   const [form, setForm] = useState(emptyForm)
 
   useEffect(() => {
@@ -26,19 +26,29 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
     } else {
       setForm({ ...emptyForm, date: todayIso() })
     }
-  }, [editing])
+  }, [editing, resetKey])
+
+  useEffect(() => {
+    if (typeof registerResetCallback === 'function') {
+      return registerResetCallback((action) => {
+        if (!editing) {
+          setForm({ ...emptyForm, date: todayIso() })
+        }
+      })
+    }
+  }, [registerResetCallback, editing])
 
   const handleChange = (event) => {
     const { name, value } = event.target
     setForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
     const amount = Number(form.amount)
     if (!form.title.trim() || !Number.isFinite(amount) || amount <= 0) return
 
-    onSubmit({
+    const success = await onSubmit({
       title: form.title.trim(),
       amount,
       category: form.category,
@@ -48,7 +58,7 @@ export default function ExpenseForm({ onSubmit, editing, onCancel }) {
       type: 'expense',
     })
 
-    if (!editing) {
+    if (success && !editing) {
       setForm({ ...emptyForm, date: todayIso() })
     }
   }

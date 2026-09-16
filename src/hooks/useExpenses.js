@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { currentMonthValue, todayIso } from '../lib/format'
 import {
   isOccurrenceDue,
@@ -258,6 +258,29 @@ export function useExpenses() {
   const [syncState, setSyncState] = useState(() => loadSyncState())
   const [isExpensesLoading, setIsExpensesLoading] = useState(false)
   const [expensesError, setExpensesError] = useState(null)
+  const [pendingAction, setPendingActionState] = useState(null)
+  const pendingActionRef = useRef(null)
+  const formResetCallbacksRef = useRef(new Set())
+  const dataRef = useRef(data)
+
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  const setPendingAction = useCallback((action) => {
+    pendingActionRef.current = action
+    setPendingActionState(action)
+  }, [])
+
+  const registerFormResetCallback = useCallback((cb) => {
+    if (typeof cb === 'function') {
+      formResetCallbacksRef.current.add(cb)
+      return () => {
+        formResetCallbacksRef.current.delete(cb)
+      }
+    }
+    return () => {}
+  }, [])
 
   const fetchUserExpenses = useCallback(async (userId) => {
     if (!supabase || !userId) {
@@ -295,12 +318,11 @@ export function useExpenses() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load expenses.'
       setExpensesError(message)
-      setData((prev) => ({ ...prev, expenses: [] }))
       setSyncState((prev) => ({
         ...prev,
         status: 'Expense sync failed',
       }))
-      return []
+      throw error
     } finally {
       setIsExpensesLoading(false)
     }
@@ -332,12 +354,11 @@ export function useExpenses() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load recurring expenses.'
       setExpensesError(message)
-      setData((prev) => ({ ...prev, recurringExpenses: [] }))
       setSyncState((prev) => ({
         ...prev,
         status: 'Recurring expense sync failed',
       }))
-      return []
+      throw error
     }
   }, [])
 
@@ -370,8 +391,13 @@ export function useExpenses() {
       setData((prev) => ({ ...prev, monthlyBudgets }))
       return monthlyBudgets
     } catch (error) {
-      setData((prev) => ({ ...prev, monthlyBudgets: {} }))
-      return {}
+      const message = error instanceof Error ? error.message : 'Unable to load monthly budgets.'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        status: 'Budget sync failed',
+      }))
+      throw error
     }
   }, [])
 
@@ -501,6 +527,30 @@ export function useExpenses() {
   }, [fetchUserExpenses, fetchUserMonthlyBudgets, fetchUserRecurringExpenses, processRecurringExpenses])
 
   useEffect(() => {
+    const handleOnline = () => {
+      setSyncState((prev) => ({
+        ...prev,
+        online: true,
+      }))
+    }
+
+    const handleOffline = () => {
+      setSyncState((prev) => ({
+        ...prev,
+        online: false,
+      }))
+    }
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!supabase) {
       setCurrentUser(null)
       setData(loadState(DEMO_USER.id))
@@ -518,7 +568,11 @@ export function useExpenses() {
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState())
-        await loadUserData(nextUser.id)
+        try {
+          await loadUserData(nextUser.id)
+        } catch {
+          // errors are captured in expensesError and syncState
+        }
         return
       }
 
@@ -529,7 +583,7 @@ export function useExpenses() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!active) return
 
       if (session?.user) {
@@ -537,7 +591,11 @@ export function useExpenses() {
         setCurrentUser(nextUser)
         setData({ ...loadState(nextUser.id), expenses: [], recurringExpenses: [], monthlyBudgets: {} })
         setSyncState(loadSyncState())
-        loadUserData(nextUser.id)
+        try {
+          await loadUserData(nextUser.id)
+        } catch {
+          // errors are captured in expensesError and syncState
+        }
       } else {
         setCurrentUser(null)
         setData(loadState(DEMO_USER.id))
@@ -580,7 +638,11 @@ export function useExpenses() {
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState())
-      await loadUserData(nextUser.id)
+      try {
+        await loadUserData(nextUser.id)
+      } catch {
+        // network sync errors already surfaced in syncState & expensesError
+      }
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
@@ -629,7 +691,11 @@ export function useExpenses() {
       setCurrentUser(nextUser)
       setData({ ...loadState(nextUser.id), expenses: [] })
       setSyncState(loadSyncState())
-      await loadUserData(nextUser.id)
+      try {
+        await loadUserData(nextUser.id)
+      } catch {
+        // network sync errors already surfaced in syncState & expensesError
+      }
       return profileUser
     } catch (error) {
       if (error instanceof Error && error.message) {
@@ -654,11 +720,13 @@ export function useExpenses() {
 
     setCurrentUser(null)
     setData(createEmptyData())
+    dataRef.current = createEmptyData()
     setExpensesError(null)
+    setPendingAction(null)
     setIsExpensesLoading(false)
   }
 
-  const addExpense = async (expense) => {
+  const addExpense = useCallback(async (expense) => {
     if (!supabase || !currentUser?.id) {
       return null
     }
@@ -691,13 +759,19 @@ export function useExpenses() {
         ...prev,
         expenses: [nextExpense, ...prev.expenses.filter((item) => item.id !== nextExpense.id)],
       }))
+      dataRef.current = {
+        ...dataRef.current,
+        expenses: [nextExpense, ...dataRef.current.expenses.filter((item) => item.id !== nextExpense.id)],
+      }
       setExpensesError(null)
+      setPendingAction(null)
       setSyncState((prev) => ({
         ...prev,
         status: 'Expense saved to cloud',
       }))
       return nextExpense
     } catch (error) {
+      setPendingAction({ type: 'ADD_EXPENSE', payload: expenseWithId })
       const message = error instanceof Error ? error.message : 'Unable to save expense.'
       setExpensesError(message)
       setSyncState((prev) => ({
@@ -706,14 +780,17 @@ export function useExpenses() {
       }))
       return null
     }
-  }
+  }, [currentUser?.id, setPendingAction])
 
-  const updateExpense = async (id, updates) => {
+  const updateExpense = useCallback(async (id, updates) => {
     if (!supabase || !currentUser?.id || !id) {
       return null
     }
 
-    const existing = data.expenses.find((item) => item.id === id)
+    const existing =
+      (dataRef.current?.expenses || []).find((item) => item.id === id) ||
+      data.expenses.find((item) => item.id === id) ||
+      { id, ...updates }
     if (!existing) {
       return null
     }
@@ -745,13 +822,19 @@ export function useExpenses() {
         ...prev,
         expenses: prev.expenses.map((item) => item.id === id ? nextExpense : item),
       }))
+      dataRef.current = {
+        ...dataRef.current,
+        expenses: dataRef.current.expenses.map((item) => item.id === id ? nextExpense : item),
+      }
       setExpensesError(null)
+      setPendingAction(null)
       setSyncState((prev) => ({
         ...prev,
         status: 'Expense updated in cloud',
       }))
       return nextExpense
     } catch (error) {
+      setPendingAction({ type: 'UPDATE_EXPENSE', payload: { id, updates } })
       const message = error instanceof Error ? error.message : 'Unable to update expense.'
       setExpensesError(message)
       setSyncState((prev) => ({
@@ -760,9 +843,9 @@ export function useExpenses() {
       }))
       return null
     }
-  }
+  }, [currentUser?.id, data.expenses, setPendingAction])
 
-  const deleteExpense = async (id) => {
+  const deleteExpense = useCallback(async (id) => {
     if (!supabase || !currentUser?.id || !id) {
       return false
     }
@@ -782,13 +865,19 @@ export function useExpenses() {
         ...prev,
         expenses: prev.expenses.filter((item) => item.id !== id),
       }))
+      dataRef.current = {
+        ...dataRef.current,
+        expenses: dataRef.current.expenses.filter((item) => item.id !== id),
+      }
       setExpensesError(null)
+      setPendingAction(null)
       setSyncState((prev) => ({
         ...prev,
         status: 'Expense removed from cloud',
       }))
       return true
     } catch (error) {
+      setPendingAction({ type: 'DELETE_EXPENSE', payload: { id } })
       const message = error instanceof Error ? error.message : 'Unable to delete expense.'
       setExpensesError(message)
       setSyncState((prev) => ({
@@ -797,7 +886,7 @@ export function useExpenses() {
       }))
       return false
     }
-  }
+  }, [currentUser?.id, setPendingAction])
 
   const setMonthlyBudget = async (month, value) => {
     if (!supabase || !currentUser?.id) {
@@ -986,15 +1075,78 @@ export function useExpenses() {
     }
   }
 
-  const syncNow = () => {
-    const timestamp = new Date().toISOString()
-    setSyncState({
+  const syncNow = useCallback(async () => {
+    if (!supabase || !currentUser?.id) {
+      return null
+    }
+
+    setIsExpensesLoading(true)
+    setSyncState((prev) => ({
+      ...prev,
       online: navigator.onLine ?? true,
-      status: 'Synced to cloud',
-      lastSyncedAt: timestamp,
-    })
-    return timestamp
-  }
+      status: 'Syncing...',
+    }))
+
+    try {
+      await loadUserData(currentUser.id)
+
+      const action = pendingActionRef.current
+      if (action) {
+        let actionResult = null
+        if (action.type === 'ADD_EXPENSE') {
+          actionResult = await addExpense(action.payload)
+        } else if (action.type === 'UPDATE_EXPENSE') {
+          actionResult = await updateExpense(action.payload.id, action.payload.updates)
+        } else if (action.type === 'DELETE_EXPENSE') {
+          const actionId = action.payload?.id ?? action.payload
+          actionResult = await deleteExpense(actionId)
+        }
+
+        if (actionResult) {
+          setPendingAction(null)
+          formResetCallbacksRef.current.forEach((cb) => {
+            try {
+              cb(action)
+            } catch (err) {
+              console.error('Error in form reset callback:', err)
+            }
+          })
+          const timestamp = new Date().toISOString()
+          setSyncState((prev) => ({
+            ...prev,
+            online: navigator.onLine ?? true,
+            status: 'Synced to cloud',
+            lastSyncedAt: timestamp,
+          }))
+          setExpensesError(null)
+          return timestamp
+        } else {
+          return null
+        }
+      }
+
+      const timestamp = new Date().toISOString()
+      setSyncState((prev) => ({
+        ...prev,
+        online: navigator.onLine ?? true,
+        status: 'Synced to cloud',
+        lastSyncedAt: timestamp,
+      }))
+      setExpensesError(null)
+      return timestamp
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sync failed'
+      setExpensesError(message)
+      setSyncState((prev) => ({
+        ...prev,
+        online: navigator.onLine ?? true,
+        status: 'Sync failed',
+      }))
+      return null
+    } finally {
+      setIsExpensesLoading(false)
+    }
+  }, [currentUser?.id, loadUserData, addExpense, updateExpense, deleteExpense, setPendingAction])
 
   const byId = useMemo(
     () => Object.fromEntries(data.expenses.map((item) => [item.id, item])),
@@ -1022,5 +1174,8 @@ export function useExpenses() {
     byId,
     isExpensesLoading,
     expensesError,
+    pendingAction,
+    registerFormResetCallback,
+    registerResetCallback: registerFormResetCallback,
   }
 }

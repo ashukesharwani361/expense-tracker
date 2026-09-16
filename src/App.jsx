@@ -151,7 +151,24 @@ export default function App() {
     removeRecurringExpense,
     syncNow,
     syncStatus,
+    isExpensesLoading,
+    expensesError,
+    pendingAction,
+    registerFormResetCallback,
   } = useExpenses()
+
+  const [formResetKey, setFormResetKey] = useState(0)
+
+  useEffect(() => {
+    if (typeof registerFormResetCallback === 'function') {
+      return registerFormResetCallback((action) => {
+        if (action?.type === 'UPDATE_EXPENSE') {
+          setEditing(null)
+        }
+        setFormResetKey((prev) => prev + 1)
+      })
+    }
+  }, [registerFormResetCallback])
 
   const [month, setMonth] = useState(currentMonthValue)
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -290,24 +307,36 @@ export default function App() {
     }
 
     if (editingRecurring) {
-      await updateRecurringExpense(editingRecurring.id, payload)
-      setEditingRecurring(null)
+      const result = await updateRecurringExpense(editingRecurring.id, payload)
+      if (result) {
+        setEditingRecurring(null)
+        setRecurringForm({
+          title: '',
+          amount: '',
+          category: 'food',
+          paymentMethod: 'upi',
+          cadence: 'monthly',
+          nextDate: todayIso(),
+          note: '',
+        })
+      }
     } else {
-      await addRecurringExpense({
+      const result = await addRecurringExpense({
         ...payload,
         isActive: true,
       })
+      if (result) {
+        setRecurringForm({
+          title: '',
+          amount: '',
+          category: 'food',
+          paymentMethod: 'upi',
+          cadence: 'monthly',
+          nextDate: todayIso(),
+          note: '',
+        })
+      }
     }
-
-    setRecurringForm({
-      title: '',
-      amount: '',
-      category: 'food',
-      paymentMethod: 'upi',
-      cadence: 'monthly',
-      nextDate: todayIso(),
-      note: '',
-    })
   }
 
   const handleAuthSubmit = async (form) => {
@@ -327,12 +356,17 @@ export default function App() {
     }
   }
 
-  const handleSubmit = (payload) => {
+  const handleSubmit = async (payload) => {
     if (editing) {
-      updateExpense(editing.id, payload)
-      setEditing(null)
+      const result = await updateExpense(editing.id, payload)
+      if (result) {
+        setEditing(null)
+        return true
+      }
+      return false
     } else {
-      addExpense(payload)
+      const result = await addExpense(payload)
+      return Boolean(result)
     }
   }
 
@@ -384,10 +418,12 @@ export default function App() {
           <button
             type="button"
             onClick={syncNow}
-            className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-400/15"
+            disabled={isExpensesLoading}
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-60"
+            aria-busy={isExpensesLoading}
           >
-            <RefreshCcw size={16} />
-            Sync
+            <RefreshCcw size={16} className={isExpensesLoading ? 'animate-spin' : ''} />
+            {isExpensesLoading ? 'Syncing…' : 'Sync'}
           </button>
 
           <button
@@ -402,6 +438,29 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {isExpensesLoading && (
+        <div className="mb-2 h-0.5 w-full overflow-hidden rounded-full">
+          <div className="h-full animate-[pulse_1.2s_ease-in-out_infinite] bg-emerald-400/60" style={{ width: '100%' }} />
+        </div>
+      )}
+
+      {expensesError && !isExpensesLoading && (
+        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-sm text-red-300" role="alert">
+          <span className="mt-0.5 shrink-0 text-red-400">⚠</span>
+          <div className="flex-1">
+            <span className="font-medium">Sync error: </span>
+            Network issue. Click Retry to re-submit your transaction.
+          </div>
+          <button
+            type="button"
+            onClick={syncNow}
+            className="shrink-0 rounded-lg border border-red-400/20 px-2.5 py-1 text-xs font-medium text-red-300 hover:bg-red-400/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <section className="mb-6 grid gap-4 xl:grid-cols-[1.5fr_0.8fr]">
         <SummaryCards
@@ -460,9 +519,21 @@ export default function App() {
             </div>
           ) : null}
           {formType === 'income' ? (
-            <IncomeForm editing={editing} onSubmit={handleSubmit} onCancel={() => setEditing(null)} />
+            <IncomeForm
+              editing={editing}
+              onSubmit={handleSubmit}
+              onCancel={() => setEditing(null)}
+              resetKey={formResetKey}
+              registerResetCallback={registerFormResetCallback}
+            />
           ) : (
-            <ExpenseForm editing={editing} onSubmit={handleSubmit} onCancel={() => setEditing(null)} />
+            <ExpenseForm
+              editing={editing}
+              onSubmit={handleSubmit}
+              onCancel={() => setEditing(null)}
+              resetKey={formResetKey}
+              registerResetCallback={registerFormResetCallback}
+            />
           )}
         </section>
 
